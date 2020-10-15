@@ -239,6 +239,9 @@ static int vcnl36866_ALSPS_hw_init(struct i2c_client* client)
 	 * Do Not return when check ID
 	 */
 	ret = vcnl36866_ALSPS_hw_check_ID();
+	if(ret < 0){
+		return ret;
+	}
 	
 	/*Set Proximity config */
 	ret = vcnl36866_proximity_hw_set_config();
@@ -1114,14 +1117,7 @@ static int vcnl36866_light_hw_turn_onoff(bool bOn)
 			log("Light Sensor power on (CS_CONF1 : 0x%x -> 0x%x)\n", 
 				power_state_data_origin[0], power_state_data_buf[0]);
 		}		
-	}else{ /* power off */	
-		ret = vcnl36866_light_hw_set_cs_standby_config(~VCNL36866_CS_STANDBY);
-		if(ret < 0)		
-			return ret;
-		ret = vcnl36866_light_hw_set_cs_config(~VCNL36866_CS_START);
-		if(ret < 0)		
-			return ret;
-		
+	}else{ /* power off */
 		power_state_data_buf[0] |= VCNL36866_CS_SD;
 		
 		ret = i2c_write_reg_u16(g_i2c_client, CS_CONF1, power_state_data_buf);
@@ -1132,7 +1128,6 @@ static int vcnl36866_light_hw_turn_onoff(bool bOn)
 			log("Light Sensor power off (CS_CONF1 : 0x%x -> 0x%x)\n", 
 				power_state_data_origin[0], power_state_data_buf[0]);
 		}
-		ALS_dynamic_status = 0;
 	}	
 
 	return 0;

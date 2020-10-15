@@ -106,7 +106,13 @@ unsigned long enter_monitor_work_count = 0;
 bool enter_jeta_cc1_flag = false;
 bool enter_jeta_cc2_flag = false;
 
+bool virtual_over_temp=false;
+
 extern bool smartchg_slow_flag;
+extern int slow_charginglimit;
+void asus_disable_smb1390(bool disable);
+
+bool is_QC2_HVDCP;
 
 #define CC2_intit_FCC_3200mA 3200000
 
@@ -271,7 +277,7 @@ bool asus_get_display_status(void)
 static final_pd_mw = 5000;
 int * chg_eval_src_caps_asus(int src_cap_cnt, u32 *received_pdos)
 {
-	int i = 0, index = 0;
+	int i = 0, index = 0, rc = 0;
 	int cur_mw = 0, cur_uv = 0, cur_ua = 0;
 	int pre_mw = 0, pre_uv = 0, pre_ua = 0;
 	int pdo_candidate = 0, pdo_candidate_9v = 0;
@@ -355,6 +361,10 @@ int * chg_eval_src_caps_asus(int src_cap_cnt, u32 *received_pdos)
 	final_pd_mw = (pre_uv / 1000) * (pre_ua / 1000);
 	pr_err("[CHG][PD]: uv (%d), ua (%d), mw (%d) final!\n", pre_uv, pre_ua, final_pd_mw);
 	
+	rc = asus_exclusive_vote(smbchg_dev->usb_icl_votable, ASUS_ICL_VOTER, true, pre_ua);
+	if (rc < 0)
+		CHG_DBG_E("Failed to set ICL\n");
+
 	return chg_rdo;
 }
 //todo
@@ -2747,7 +2757,6 @@ int smblib_get_prop_batt_health(struct smb_charger *chg,
 	int rc;
 	int effective_fv_uv;
 	u8 stat;
-	u8 chg_stat,vbus_stat;
 
 	rc = smblib_read(chg, BATTERY_CHARGER_STATUS_2_REG, &stat);
 	if (rc < 0) {
@@ -2767,6 +2776,17 @@ int smblib_get_prop_batt_health(struct smb_charger *chg,
 			 * treat it as overvoltage.
 			 */
 			effective_fv_uv = get_effective_result(chg->fv_votable);
+			if(effective_fv_uv == 4080000)
+			{
+				if(pval.intval >= 4380000)
+				{
+					val->intval = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
+					smblib_err(chg, "battery over-voltage vbat_fg = %duV, fv = %duV\n",
+					pval.intval, effective_fv_uv);
+					goto done;
+				}
+			}
+			else
 			if (pval.intval >= effective_fv_uv + 40000) {
 				val->intval = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
 				smblib_err(chg, "battery over-voltage vbat_fg = %duV, fv = %duV\n",
@@ -2788,23 +2808,8 @@ int smblib_get_prop_batt_health(struct smb_charger *chg,
 		val->intval = POWER_SUPPLY_HEALTH_OVERHEAT;
 	else if (stat & BAT_TEMP_STATUS_COLD_SOFT_BIT)
 		val->intval = POWER_SUPPLY_HEALTH_COOL;
-	else if (stat & BAT_TEMP_STATUS_HOT_SOFT_BIT) {
+	else if (stat & BAT_TEMP_STATUS_HOT_SOFT_BIT)
 		val->intval = POWER_SUPPLY_HEALTH_WARM;
-		
-		//WeiYu ++ modify for jeita icon issue
-		rc = smblib_read(smbchg_dev, USBIN_BASE + INT_RT_STS_OFFSET, &vbus_stat);	
-		rc = smblib_read(smbchg_dev, CHARGING_ENABLE_CMD_REG, &chg_stat);	
-		if((bool)(vbus_stat & USBIN_PLUGIN_RT_STS_BIT)){
-			if((chg_stat&CHARGING_ENABLE_CMD_BIT) == 1){
-				val->intval = POWER_SUPPLY_HEALTH_GOOD;
-				//CHG_DBG_EVT("Warm-temp but reporting health good due to charging is enabled\n");
-			}
-			else{
-				val->intval = POWER_SUPPLY_HEALTH_OVERHEAT;
-			}
-		}
-
-	}
 	else
 		val->intval = POWER_SUPPLY_HEALTH_GOOD;
 
@@ -5269,6 +5274,36 @@ int smblib_set_prop_pd_active(struct smb_charger *chg,
 		return 0;
 #endif
 
+	if ( chg->pd_active == POWER_SUPPLY_PD_ACTIVE ) //PD
+	{
+		if(smartchg_slow_flag)
+		{
+				if(slow_charginglimit == 10)
+				{
+					asus_exclusive_vote(smbchg_dev->usb_icl_votable, ASUS_SLOWCHG_VOTER, true, 1000000);
+				}
+				else if (slow_charginglimit == 18)
+				{
+					asus_exclusive_vote(smbchg_dev->usb_icl_votable, ASUS_SLOWCHG_VOTER, false, 0);
+				}
+		}
+	}
+	else if ( chg->pd_active == POWER_SUPPLY_PD_PPS_ACTIVE )
+	{
+		if(smartchg_slow_flag)
+		{
+				asus_disable_smb1390(true);
+				if(slow_charginglimit == 10)
+				{
+					asus_exclusive_vote(smbchg_dev->usb_icl_votable, ASUS_SLOWCHG_VOTER, true, 1500000);
+				}
+				else if (slow_charginglimit == 18)
+				{
+					asus_exclusive_vote(smbchg_dev->usb_icl_votable, ASUS_SLOWCHG_VOTER, true, 2000000);
+				}
+		}
+	}
+
 	chg->pd_active = val->intval;
 	smblib_apsd_enable(chg, !chg->pd_active);
 
@@ -5827,6 +5862,10 @@ void asus_typec_removal_function(struct smb_charger *chg)
 	is_asus_vid=0;
 	second_apsd=false;
 
+	virtual_over_temp=false;
+
+	is_QC2_HVDCP = false;
+
 	alarm_cancel(&bat_alarm);
 	asus_flow_processing = 0;
 	asus_CHG_TYPE = 0;
@@ -6130,7 +6169,20 @@ void asus_disable_smb1390(bool disable)
 
 			if(smartchg_slow_flag)
 			{
-				CHG_DBG_E("[stop_charging] smartchg_slow_flag, just disable  1390\n");
+				if( smbchg_dev->real_charger_type == POWER_SUPPLY_TYPE_USB_HVDCP_3 && !is_QC2_HVDCP && slow_charginglimit == 18)
+				{
+					CHG_DBG_E("[stop_charging] smartchg_slow_flag 18W, QC3 ,allow to enable \n");
+				}
+				else
+				{
+					CHG_DBG_E("[stop_charging] smartchg_slow_flag, just disable  1390\n");
+					disable = true;
+				}
+			}
+			
+			if( is_QC2_HVDCP )
+			{
+				CHG_DBG_E("QC2, just disable  1390\n");
 				disable = true;
 			}
 		}
@@ -6229,6 +6281,8 @@ finish:
 
 extern int asus_read_smb1390_ISNS(void);
 extern int asus_read_smb1390_cp_enable(void);
+int cc1_check_voltage = 4320000;
+extern int get_battery_total_time(void);
 void asus_jeta_cc1_work(struct work_struct *work)
 {
 	int FCC_uA;
@@ -6241,7 +6295,7 @@ void asus_jeta_cc1_work(struct work_struct *work)
 	int ILIM_current;
 
 	bat_volt = asus_get_prop_batt_volt(smbchg_dev);
-	pr_info("cc1 bat_volt:%d ,total_fcc:%d,enter_flag=%d ",bat_volt,Total_FCC_Value,enter_jeta_cc1_flag);
+	pr_info("cc1 bat_volt:%d ,total_fcc:%d,enter_flag=%d cc1_check_voltage=%d",bat_volt,Total_FCC_Value,enter_jeta_cc1_flag,cc1_check_voltage);
 
 	if (enter_jeta_cc1_flag == false)
 	{
@@ -6255,7 +6309,7 @@ void asus_jeta_cc1_work(struct work_struct *work)
 			CHG_DBG("Couldn't write jeita_status_register, rc = %d\n", rc);
 	}
 
-	if(bat_volt > 4300000 && Total_FCC_Value == CC2_intit_FCC_3200mA)
+	if(bat_volt > cc1_check_voltage && Total_FCC_Value == CC2_intit_FCC_3200mA)
 	{// enter jeita cc2 setting
 		FV_uV = FV_JEITA_uV;
 		FCC_uA = CC2_intit_FCC_3200mA;
@@ -6267,7 +6321,7 @@ void asus_jeta_cc1_work(struct work_struct *work)
 
 		goto abort;
 	}
-	else if(bat_volt > 4300000 && Total_FCC_Value > CC2_intit_FCC_3200mA){
+	else if(bat_volt > cc1_check_voltage && Total_FCC_Value > CC2_intit_FCC_3200mA){
 		FV_uV = FV_JEITA_uV;
 		FCC_uA = Total_FCC_Value - FCC_uA_step;
 
@@ -6325,7 +6379,7 @@ void asus_jeta_cc2_work(struct work_struct *work)
 		if (rc < 0)
 			CHG_DBG("Couldn't write jeita_status_register, rc = %d\n", rc);
 		asus_disable_smb1390(true);
-		goto abort;
+		goto continue_work;
 	}
 	else if(bat_volt > 4380000 && Total_FCC_Value > 2400000){
 		FV_uV = FV_JEITA_uV;
@@ -6350,11 +6404,18 @@ void asus_jeta_cc2_work(struct work_struct *work)
 
 	schedule_delayed_work(&smbchg_dev->asus_jeta_cc2_work, msecs_to_jiffies(10000));
 	return;
+
+continue_work:
+	CHG_DBG("continue jeita CC2 work every 30s\n");
+	schedule_delayed_work(&smbchg_dev->asus_jeta_cc2_work, msecs_to_jiffies(30000));
+	return;
+	
 abort:
 	enter_jeta_cc2_flag = false;
 	CHG_DBG("abort jeita CC2 work\n");
 }
 
+extern void asus_set_jeita_temp_thr(void);
 void jeita_rule(void)
 {
 	static int state = JEITA_STATE_INITIAL;
@@ -6370,7 +6431,21 @@ void jeita_rule(void)
 	int FCC_uA;
 
 	int vadc;
+	int battery_total_using_time;
 
+	asus_set_jeita_temp_thr();
+
+	battery_total_using_time=get_battery_total_time();
+	
+	if (battery_total_using_time >= (6*30*24*60*60))
+	{
+		cc1_check_voltage = 4300000;
+	}
+	else
+	{
+		cc1_check_voltage = 4320000;
+	}
+	
 	if (no_input_suspend_flag)
 		rc = smblib_write(smbchg_dev, JEITA_EN_CFG_REG, 0x00);
 	else
@@ -6399,8 +6474,8 @@ void jeita_rule(void)
 			CHG_DBG_E("Error in reading asus_wp_temp_vadc_chan channel, rc=%d\n", rc);
 		}
 	}
-	CHG_DBG_E("health = %s, temp = %d, capacity = %d, volt = %duV, ICL = %duA(0x%x) , asus_wp_temp=%d \n",
-			health_type[bat_health], bat_temp, bat_capacity, bat_volt, (int)ICL_reg*50000, ICL_reg, vadc);
+	CHG_DBG_E("health = %s, temp = %d, capacity = %d, volt = %duV, ICL = %duA(0x%x) , asus_wp_temp=%d battery_total_time= %d,cc1_check_voltage=%d\n",
+			health_type[bat_health], bat_temp, bat_capacity, bat_volt, (int)ICL_reg*50000, ICL_reg, vadc,battery_total_using_time,cc1_check_voltage);
 
 	switch (state) {
 	case JEITA_STATE_LESS_THAN_0:
@@ -6446,7 +6521,7 @@ void jeita_rule(void)
 		break;
 	case JEITA_STATE_RANGE_200_to_450:
 		charging_enable = EN_BAT_CHG_EN_COMMAND_TRUE;
-		if(enter_monitor_work_count == 0 && bat_volt >= 4300000)
+		if(enter_monitor_work_count == 0 && bat_volt >= cc1_check_voltage)
 		{//enter jeita_cc2 setting
 			CHG_DBG("first plug in ,meet cc2\n");
 			enter_jeta_cc1_flag=false;
@@ -6457,7 +6532,7 @@ void jeita_rule(void)
 			cancel_delayed_work(&smbchg_dev->asus_jeta_cc1_work);
 			schedule_delayed_work(&smbchg_dev->asus_jeta_cc2_work, msecs_to_jiffies(10000));	
 		}
-		else if(enter_jeta_cc1_flag==false && enter_jeta_cc2_flag==false && bat_volt < 4300000)
+		else if(enter_jeta_cc1_flag==false && enter_jeta_cc2_flag==false && bat_volt < cc1_check_voltage)
 		{
 			//enter jeta CC1 work
 			cancel_delayed_work(&smbchg_dev->asus_jeta_cc1_work);
@@ -10510,11 +10585,13 @@ static void asus_hvdcp3_18W_workaround_work(struct work_struct *work)
 		rc = smblib_write(chg, CMD_HVDCP_2_REG, 0x10);//0x1343=10
 		if (rc < 0) 
 			smblib_err(chg, "Couldn't write CMD_HVDCP_2_REG rc=%d\n",rc);
-			
+		
+		is_QC2_HVDCP = true;
+		
 		rc = asus_exclusive_vote(chg->usb_icl_votable, ASUS_ICL_VOTER, true, 1700000);
 		if (rc < 0)
 			CHG_DBG_E("Failed to set ICL\n");
-			
+
 		goto finish;
 	}
 	else if (voltage_val.intval > 8000000)
@@ -10524,6 +10601,17 @@ static void asus_hvdcp3_18W_workaround_work(struct work_struct *work)
 		if(bat_volt >= 4000000)
 		{
 			pr_info("asus_hvdcp3_18W_workaround_work vbat >= 4V  skip setting\n");
+
+			if(smartchg_slow_flag)
+			{
+				if(slow_charginglimit == 10)
+				{
+						CHG_DBG_E("slow charging = 10W ,QC3 limit pm8150b ICL 1A\n");
+						asus_exclusive_vote(chg->usb_icl_votable, ASUS_SLOWCHG_VOTER, true, 1000000);
+				}
+			}
+
+			goto finish;
 		}
 		else
 		{
@@ -10540,6 +10628,11 @@ static void asus_hvdcp3_18W_workaround_work(struct work_struct *work)
 			asus_set_smb1390_ILIM(2000000);
 		}
 	}
+	else
+	{
+			pr_info("5.25V =< vbus <=8V \n");
+			goto finish;
+	}
 	cancel_delayed_work_sync(&chg->asus_panel_check_work);
 	schedule_delayed_work(&chg->asus_panel_check_work, msecs_to_jiffies(0));
 
@@ -10554,7 +10647,7 @@ static void asus_hvdcp3_setting_work(struct work_struct *work)
 	struct smb_charger *chg = container_of(delayed_work, struct smb_charger,
 							asus_hvdcp3_setting_work);
 
-	int i,rc;
+	int i,rc,bat_volt;
 	u8 apsd_result_status;
 	union power_supply_propval voltage_val;
 
@@ -10581,11 +10674,67 @@ static void asus_hvdcp3_setting_work(struct work_struct *work)
 			}
 
 			smblib_write(chg, 0x1343, 0x01);//0x1343=0x01
-			if(i < 19)
+			if(i < 20)
 			{
 				mdelay(1000);
 			}
 		}
+		pr_info(" asus_hvdcp3_setting_work check vbus =%d ",voltage_val.intval);
+		if(smartchg_slow_flag)
+		{
+			bat_volt = asus_get_prop_batt_volt(smbchg_dev);
+			smblib_get_prop_usb_voltage_now(smbchg_dev, &voltage_val);
+			if(slow_charginglimit == 10)
+			{
+
+				CHG_DBG_E("10W check vbus %d \n",voltage_val.intval);
+				if(voltage_val.intval > 8000000) // QC3
+				{
+					is_QC2_HVDCP = false;
+					if(bat_volt >= 4000000)
+					{
+						CHG_DBG_E("slow charging = 10W ,QC3 limit pm8150b ICL 1A\n");
+						asus_exclusive_vote(chg->usb_icl_votable, ASUS_SLOWCHG_VOTER, true, 1000000);
+					}
+					else
+					{
+						CHG_DBG_E("slow charging = 10W ,QC3 limit pm8150b ICL 1.5A\n");
+						asus_exclusive_vote(chg->usb_icl_votable, ASUS_SLOWCHG_VOTER, true, 1500000);
+					}
+				}
+				else //QC2
+				{
+						CHG_DBG_E("slow charging = 10W ,QC2 limit pm8150b ICL 1A\n");
+						asus_exclusive_vote(chg->usb_icl_votable, ASUS_SLOWCHG_VOTER, true, 1000000);
+				}
+			}
+			else if(slow_charginglimit == 18)
+			{
+				CHG_DBG_E("18W check vbus %d \n",voltage_val.intval);
+				if(voltage_val.intval > 8000000) // QC3
+				{
+					is_QC2_HVDCP = false;
+					if(bat_volt >= 4000000)
+					{
+						CHG_DBG_E("QC3 slow charging = 18W , vbat >= 4V\n");
+						asus_disable_smb1390(true);
+						asus_exclusive_vote(chg->usb_icl_votable, ASUS_SLOWCHG_VOTER, false, 0);
+					}
+					else
+					{
+						CHG_DBG_E("QC3 slow charging = 18W \n");
+						asus_exclusive_vote(chg->usb_icl_votable, ASUS_SLOWCHG_VOTER, false, 0);
+					}
+				}
+				else //QC2
+				{
+						CHG_DBG_E("QC2 slow charging = 18W  \n");
+						asus_exclusive_vote(chg->usb_icl_votable, ASUS_SLOWCHG_VOTER, false, 0);
+				}
+				
+			}
+		}
+
 		schedule_delayed_work(&chg->asus_hvdcp3_18W_workaround_work, msecs_to_jiffies(40000));
 	}
 }
@@ -10653,6 +10802,7 @@ static void read_vendor_id_work(struct work_struct *work)
 	}
 }
 
+extern int G_virtual_therm_temp;
 static void asus_panel_check_work(struct work_struct *work)
 {
 	struct delayed_work *delayed_work = to_delayed_work(work);
@@ -10681,52 +10831,70 @@ static void asus_panel_check_work(struct work_struct *work)
 	}
 	else //panel off keep vid result setting
 	{
-		if(is_asus_vid == 0 && smbchg_dev->pd_active == POWER_SUPPLY_PD_PPS_ACTIVE)
+		if(G_virtual_therm_temp > 42000)
 		{
-			//VID != ASUS, set CFG_ILIM = 1.0A  
-			CHG_DBG_E("screen off VID = Other ,set PM8150B usb icl=2A \n");
-			rc = asus_exclusive_vote(chg->usb_icl_votable, ASUS_ICL_VOTER, true, 2000000);
+			CHG_DBG_E("virtual > 42C");
+			virtual_over_temp = true;
+			rc = asus_exclusive_vote(chg->usb_icl_votable, ASUS_ICL_VOTER, true, 1000000);
 			if (rc < 0)
 				CHG_DBG_E("Failed to set ICL\n");
-
-			//asus_set_smb1390_ILIM(1500000);
-
-			if(asus_get_prop_total_fcc() >2400)
-			{
-				asus_disable_smb1390(false);
-			}
-
+			asus_disable_smb1390(true);
 			schedule_delayed_work(&chg->asus_panel_check_work, msecs_to_jiffies(60000));
 		}
-		else if ( is_asus_vid ==1 ) //also PPS and asus vendor id
+		else if( G_virtual_therm_temp < 40000 || virtual_over_temp == false)
 		{
-			CHG_DBG_E("screen off  VID = ASUS,set PM8150B usb icl=2.7A \n");
-			rc = asus_exclusive_vote(chg->usb_icl_votable, ASUS_ICL_VOTER, true, 2700000);
-			if (rc < 0)
-				CHG_DBG_E("Failed to set ICL\n");
-			//asus_set_smb1390_ILIM(2200000);
-			
-			if(asus_get_prop_total_fcc() >2400)
+			virtual_over_temp = false;
+			if(is_asus_vid == 0 && smbchg_dev->pd_active == POWER_SUPPLY_PD_PPS_ACTIVE)
 			{
-				asus_disable_smb1390(false);
+				//VID != ASUS, set CFG_ILIM = 1.0A  
+				CHG_DBG_E("screen off VID = Other ,set PM8150B usb icl=2A \n");
+				rc = asus_exclusive_vote(chg->usb_icl_votable, ASUS_ICL_VOTER, true, 2000000);
+				if (rc < 0)
+					CHG_DBG_E("Failed to set ICL\n");
+	
+				//asus_set_smb1390_ILIM(1500000);
+	
+				if(asus_get_prop_total_fcc() >2400)
+				{
+					asus_disable_smb1390(false);
+				}
+	
+				schedule_delayed_work(&chg->asus_panel_check_work, msecs_to_jiffies(60000));
 			}
-
-			schedule_delayed_work(&chg->asus_panel_check_work, msecs_to_jiffies(60000));
-		}
-		else if(chg->real_charger_type == POWER_SUPPLY_TYPE_USB_HVDCP_3  )
-		{
-			if( asus_get_prop_batt_volt(chg) > 4000000)
+			else if ( is_asus_vid ==1 ) //also PPS and asus vendor id
 			{
-				CHG_DBG_E("screen off HVDCP3.0 && VBAT >4.0,disable CP,abort panel check\n");
-				asus_disable_smb1390(true);
+				CHG_DBG_E("screen off  VID = ASUS,set PM8150B usb icl=2.7A \n");
+				rc = asus_exclusive_vote(chg->usb_icl_votable, ASUS_ICL_VOTER, true, 2700000);
+				if (rc < 0)
+					CHG_DBG_E("Failed to set ICL\n");
+				//asus_set_smb1390_ILIM(2200000);
+				
+				if(asus_get_prop_total_fcc() >2400)
+				{
+					asus_disable_smb1390(false);
+				}
+	
+				schedule_delayed_work(&chg->asus_panel_check_work, msecs_to_jiffies(60000));
+			}
+			else if(chg->real_charger_type == POWER_SUPPLY_TYPE_USB_HVDCP_3  )
+			{
+				if( asus_get_prop_batt_volt(chg) > 4000000)
+				{
+					CHG_DBG_E("screen off HVDCP3.0 && VBAT >4.0,disable CP,abort panel check\n");
+					asus_disable_smb1390(true);
+				}
+				else
+				{
+					if(asus_get_prop_total_fcc() >2400)
+					{
+						CHG_DBG_E("screen off HVDCP3.0 enable 1390\n");
+						asus_disable_smb1390(false);
+					}
+					schedule_delayed_work(&chg->asus_panel_check_work, msecs_to_jiffies(60000));
+				}
 			}
 			else
 			{
-				if(asus_get_prop_total_fcc() >2400)
-				{
-					CHG_DBG_E("screen off HVDCP3.0 enable 1390\n");
-					asus_disable_smb1390(false);
-				}
 				schedule_delayed_work(&chg->asus_panel_check_work, msecs_to_jiffies(60000));
 			}
 		}
