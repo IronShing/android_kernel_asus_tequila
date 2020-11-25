@@ -2521,10 +2521,11 @@ static int __init ALSPS_init_2nd(void)
 	if (ret < 0)
 		goto init_err;
 #endif
+/*
 	ret = psensor_report_register();
 	if (ret < 0)
 		goto init_err;
-
+*/
 #if ENABLE_LIGHT_IOCTL_LIB
 	ret = lightSensor_miscRegister();
 	if (ret < 0)
@@ -2533,14 +2534,14 @@ static int __init ALSPS_init_2nd(void)
 /*
 	ret = lsensor_report_register();
 	if (ret < 0)
-		goto init_err;
+		goto init_err;	
 */
 	ALSPS_SENSOR_IRQ = ALSPSsensor_gpio_register_2nd(g_i2c_client, &mALSPSsensor_GPIO);
 	if (ALSPS_SENSOR_IRQ < 0)
 		goto init_err;	
 
 	/*To avoid LUX can NOT report when reboot in LUX=0*/
-	//lsensor_report_lux(-1);
+	lsensor_report_lux(-1);
 	log("[INIT] 2nd Proximity Report Away\n");
 	g_ps_data->g_ps_int_status = ALSPS_INT_PS_INIT;
 	psensor_report_abs(-1);
