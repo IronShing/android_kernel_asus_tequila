@@ -16,7 +16,7 @@
 
 #include "inc/dbgprint.h"
 #include "inc/tfa_service.h"
-#include "inc/tfa_internal.h"
+#include "tfa_internal.h"
 #include "inc/tfa_container.h"
 #include "inc/tfa98xx_tfafieldnames.h"
 
