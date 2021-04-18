@@ -655,9 +655,6 @@ config HID_MULTITOUCH
 config HID_NINTENDO
 	tristate "Nintendo Joy-Con and Pro Controller support"
 	depends on HID
-	depends on NEW_LEDS
-	depends on LEDS_CLASS
-	select POWER_SUPPLY
 	help
 	Adds support for the Nintendo Switch Joy-Cons and Pro Controller.
 	All controllers support bluetooth, and the Pro Controller also supports
@@ -665,16 +662,6 @@ config HID_NINTENDO
 
 	To compile this driver as a module, choose M here: the
 	module will be called hid-nintendo.
-
-config NINTENDO_FF
-	bool "Nintendo Switch controller force feedback support"
-	depends on HID_NINTENDO
-	select INPUT_FF_MEMLESS
-	help
-	Say Y here if you have a Nintendo Switch controller and want to enable
-	force feedback support for it. This works for both joy-cons and the pro
-	controller. For the pro controller, both rumble motors can be controlled
-	individually.
 
 config HID_NTI
 	tristate "NTI keyboard adapters"
@@ -1111,12 +1098,6 @@ config HID_QVR
 	retrieve the calibration data of the associated device.
 	Say 'Y' or 'M' if you want to connect an external device to
 	stream sensor data for QVR support.
-
-config USB_EC_DRIVER
-	tristate "USB_EC_DRIVER gDongleType support"
-	depends on HID
-	---help---
-	Say 'Y' if EC driver and gDongleType ready
 
 endmenu
 
