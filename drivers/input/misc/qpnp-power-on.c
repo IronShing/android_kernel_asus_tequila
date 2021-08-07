@@ -270,7 +270,6 @@ extern struct wakeup_source *pk_wake_lock;
 extern bool g_Charger_mode;
 #endif
 
-
 static u32 s1_delay[PON_S1_COUNT_MAX + 1] = {
 	0, 32, 56, 80, 138, 184, 272, 408, 608, 904, 1352, 2048, 3072, 4480,
 	6720, 10256

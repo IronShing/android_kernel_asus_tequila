@@ -829,10 +829,6 @@ static int gf_remove(struct platform_device *pdev)
 	if (gf_dev->users == 0)
 		gf_cleanup(gf_dev);
 
-    if (gf_dev->active_panel_asus  !=  NULL) {
-        if (drm_panel_notifier_unregister(gf_dev->active_panel_asus, &gf_dev->notifier) < 0)
-		     pr_err("Failed to drm_panel_notifier_unregister");
-	}
 	mutex_unlock(&device_list_lock);
 
 	return 0;

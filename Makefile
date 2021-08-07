@@ -493,7 +493,7 @@ ifeq ($(shell $(srctree)/scripts/clang-android.sh $(CC) $(CLANG_FLAGS)), y)
 $(error "Clang with Android --target detected. Did you specify CLANG_TRIPLE?")
 endif
 GCC_TOOLCHAIN_DIR := $(dir $(shell which $(CROSS_COMPILE)elfedit))
-CLANG_FLAGS	+= --prefix=$(GCC_TOOLCHAIN_DIR)
+CLANG_FLAGS	+= --prefix=$(GCC_TOOLCHAIN_DIR)$(notdir $(CROSS_COMPILE))
 GCC_TOOLCHAIN	:= $(realpath $(GCC_TOOLCHAIN_DIR)/..)
 endif
 ifneq ($(GCC_TOOLCHAIN),)
@@ -699,11 +699,7 @@ ifeq ($(call shell-cached,$(CONFIG_SHELL) $(srctree)/scripts/gcc-goto.sh $(CC) $
 	KBUILD_AFLAGS += -DCC_HAVE_ASM_GOTO
 endif
 
-ifneq ($(BUILD_NUMBER),)
-	KBUILD_CPPFLAGS += -DASUS_SW_VER=\"$(TARGET_SKU)-$(BUILD_NUMBER)\"
-else
-	KBUILD_CPPFLAGS += -DASUS_SW_VER=\"$(TARGET_SKU)-$(ASUS_BUILD_PROJECT)_ENG\"
-endif
+KBUILD_CPPFLAGS += -DASUS_SW_VER=\"omnirom\"
 
 include scripts/Makefile.kcov
 include scripts/Makefile.gcc-plugins
@@ -784,7 +780,7 @@ endif
 
 KBUILD_CFLAGS   += $(call cc-option, -fno-var-tracking-assignments)
 
-#KBUILD_CFLAGS   += $(call cc-option, -Wvla)
+KBUILD_CFLAGS   += $(call cc-option, -Wvla)
 
 ifdef CONFIG_DEBUG_INFO
 ifdef CONFIG_DEBUG_INFO_SPLIT
@@ -974,24 +970,20 @@ KBUILD_CPPFLAGS += $(ARCH_CPPFLAGS) $(KCPPFLAGS)
 KBUILD_AFLAGS   += $(ARCH_AFLAGS)   $(KAFLAGS)
 KBUILD_CFLAGS   += $(ARCH_CFLAGS)   $(KCFLAGS)
 
+
+#ASUS_SZ_BSP 2019/11/15 Cassie:add ZS670KS for kernel+++
 ifdef CONFIG_MACH_ASUS_ZS670KS
 KBUILD_CPPFLAGS += -DZS670KS=1
 endif
+#ASUS_SZ_BSP 2019/11/15 Cassie:add ZS670KS for kernel---
 
+# Add ASUS build Project to KBUILD_CPPFLAGS
 ifdef CONFIG_MACH_ASUS_ZS661KS
 KBUILD_CPPFLAGS += -DASUS_ZS661KS_PROJECT=1
 endif
 
 # Add ASUS build option to KBUILD_CPPFLAGS
-ifneq ($(TARGET_BUILD_VARIANT),user)
-ifeq ($(ASUS_FTM),y)
-KBUILD_CPPFLAGS += -DASUS_FTM_BUILD=1
-else
-KBUILD_CPPFLAGS += -DASUS_USERDEBUG_BUILD=1
-endif
-else
 KBUILD_CPPFLAGS += -DASUS_USER_BUILD=1
-endif
 
 ifeq ($(ASUS_DXO),y)
 KBUILD_CPPFLAGS += -DASUS_DXO=1

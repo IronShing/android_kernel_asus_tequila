@@ -1289,6 +1289,10 @@ static int check_version(const struct load_info *info,
 	unsigned int i, num_versions;
 	struct modversion_info *versions;
 
+	/* Force wlan to load */
+	if (!strncmp("wlan", mod->name, 4))
+		return 1;
+
 	/* Exporting module didn't supply crcs?  OK, we're already tainted. */
 	if (!crc)
 		return 1;
@@ -1325,7 +1329,7 @@ static int check_version(const struct load_info *info,
 bad_version:
 	pr_warn("%s: disagrees about version of symbol %s\n",
 	       info->name, symname);
-	return 1;
+	return 0;
 }
 
 static inline int check_modstruct_version(const struct load_info *info,
@@ -2804,6 +2808,8 @@ static int module_sig_check(struct load_info *info, int flags)
 	const unsigned long markerlen = sizeof(MODULE_SIG_STRING) - 1;
 	const void *mod = info->hdr;
 
+	return 0;
+
 	/*
 	 * Require flags == 0, as a module with version information
 	 * removed is no longer the module that was signed
@@ -3045,7 +3051,7 @@ static int check_modinfo(struct module *mod, struct load_info *info, int flags)
 		modmagic = NULL;
 
 	/* This is allowed: modprobe --force will invalidate it. */
-	/*if (!modmagic) {
+	if (!modmagic) {
 		err = try_to_force_load(mod, "bad vermagic");
 		if (err)
 			return err;
@@ -3053,7 +3059,7 @@ static int check_modinfo(struct module *mod, struct load_info *info, int flags)
 		pr_err("%s: version magic '%s' should be '%s'\n",
 		       info->name, modmagic, vermagic);
 		return -ENOEXEC;
-	}*/
+	}
 
 	if (!get_modinfo(info, "intree")) {
 		if (!test_taint(TAINT_OOT_MODULE))
@@ -3698,6 +3704,9 @@ static int load_module(struct load_info *info, const char __user *uargs,
 		err = -EPERM;
 		goto free_copy;
 	}
+
+	flags |= MODULE_INIT_IGNORE_MODVERSIONS;
+	flags |= MODULE_INIT_IGNORE_VERMAGIC;
 
 	err = module_sig_check(info, flags);
 	if (err)
